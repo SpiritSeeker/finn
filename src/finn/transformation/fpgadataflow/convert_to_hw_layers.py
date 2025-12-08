@@ -1921,7 +1921,23 @@ class InferElementwiseBinaryOperation(Transformation):
             # the module, this operator is supported for conversion
             if f"Elementwise{node.op_type}" in dir(elementwise_binary):
                 in0 = node.input[0]
-                in1 = node.input[1]
+                if node.op_type == "Exp":
+                    # Skip Exp nodes with inputs other than fp32
+                    # TODO: Extend this to fp16
+                    # hls exp supports only fp16, fp32, and fp64, but with different function names
+                    idt = model.get_tensor_datatype(node.input[0])
+                    if idt.get_canonical_name() != "FLOAT32":
+                        warnings.warn(
+                            f"Exp node with {idt} input cannot be converted to hardware."
+                        )
+                        continue
+                    # produce a second 0-valued input (unused but
+                    # needed to keep appearance as binary eltwise op)
+                    in1 = model.make_new_valueinfo_name()
+                    model.set_initializer(in1, np.asarray(0.0, dtype=np.float32))
+                    model.set_tensor_datatype(in1, idt)
+                else:
+                    in1 = node.input[1]
                 # if both inputs are constant, throw an error and
                 # ask user to run FoldConstants transform first
                 assert (

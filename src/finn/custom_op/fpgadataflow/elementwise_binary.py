@@ -734,6 +734,18 @@ class ElementwiseBitShift(ElementwiseBinaryOperation):
         return DataType[self.get_nodeattr("out_dtype")]
 
 
+# Derive a specialization to implement elementwise exp of an input
+# Note: this is not a binary op, but a unary op
+@register_custom_op
+class ElementwiseExp(ElementwiseBinaryOperation):
+    # Specialize to implement the exp of the left hand side input
+    # The right hand side input is ignored
+    _operation = "Exp", lambda x, y: np.exp(x), "hls::expf({0})", None
+
+    def _derive_out_dtype(self, model: ModelWrapper):
+        return DataType["FLOAT32"]
+
+
 # # Derive a specialization to implement elementwise power of two inputs
 # TODO: std::pow does not work for HLS types and hls::pow fails to link for some
 #  reason

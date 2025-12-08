@@ -369,3 +369,96 @@ def test_elementwise_binary_operation_stitched_ip(
     else:
         # Compare the expected to the produced for exact equality
         assert np.all(o_produced == o_expected)
+
+
+# Creates a model executing an elementwise exp operation
+def create_elementwise_exp_operation_onnx(
+    input_dtype, out_dtype, input_shape
+):
+    # Create a node representing the elementwise exp operation
+    node = oh.make_node(
+        op_type="Exp",
+        inputs=["inp"],
+        outputs=["out"],
+    )
+    inp = oh.make_tensor_value_info("inp", TensorProto.FLOAT, input_shape)
+    out = oh.make_tensor_value_info("out", TensorProto.FLOAT, input_shape)
+    # Create a graph connecting the node to the inputs and outputs
+    graph = oh.make_graph([node], inputs=[inp], outputs=[out], name="elementwise-exp")
+    model = ModelWrapper(qonnx_make_model(graph, producer_name="elementwise-exp"))
+
+    # Add datatype annotation to the value info of input and output tensors
+    model.set_tensor_datatype("inp", DataType[input_dtype])
+    model.set_tensor_datatype("out", DataType[out_dtype])
+
+    return model
+
+# Data type of the input elements
+@pytest.mark.parametrize("input_dtype", ["FLOAT32"])
+# Shape of the input
+@pytest.mark.parametrize("input_shape", [[3, 1, 4], [8]])
+# Number of elements to process in parallel
+@pytest.mark.parametrize("pe", [1, 2, 4])
+# Exec mode
+@pytest.mark.parametrize("exec_mode", ["cppsim", "rtlsim"])
+@pytest.mark.fpgadataflow
+@pytest.mark.slow
+@pytest.mark.vivado
+def test_elementwise_exp_operation(
+    input_dtype, input_shape, pe, exec_mode
+):
+    out_dtype = "FLOAT16" if input_dtype == "FLOAT16" else "FLOAT32"
+    # Make dummy model for testing
+    model = create_elementwise_exp_operation_onnx(
+        input_dtype, out_dtype, input_shape
+    )
+    # Prepare the execution context
+    context = {
+        "inp": gen_finn_dt_tensor(DataType[input_dtype], input_shape),
+    }
+
+    # Test running shape and data type inference on the model graph
+    model = model.transform(InferDataTypes())
+    model = model.transform(InferShapes())
+
+    # Specializes all nodes to be implemented as HLS backend
+    model = model.transform(InferElementwiseBinaryOperation())
+
+    assert len(model.graph.node) == 1
+    assert model.graph.node[0].op_type == f"ElementwiseExp"
+
+    # Test running shape and data type inference on the model graph
+    model = model.transform(InferDataTypes())
+    model = model.transform(InferShapes())
+
+    # Specializes all nodes to be implemented as HLS backend
+    model = model.transform(SpecializeLayers("xczu7ev-ffvc1156-2-e"))
+
+    assert len(model.graph.node) == 1
+    assert model.graph.node[0].op_type == f"ElementwiseExp_hls"
+
+    getCustomOp(model.graph.node[0]).set_nodeattr("PE", pe)
+
+    # Try to minimize the bit-widths of all data types involved
+    model = model.transform(MinimizeWeightBitWidth())
+    model = model.transform(MinimizeAccumulatorWidth())
+
+    model = model.transform(SetExecMode(exec_mode))
+    model = model.transform(GiveUniqueNodeNames())
+    if exec_mode == "cppsim":
+        model = model.transform(PrepareCppSim())
+        model = model.transform(CompileCppSim())
+    else:
+        model = model.transform(PrepareIP("xczu7ev-ffvc1156-2-e", 10))
+        model = model.transform(HLSSynthIP())
+        model = model.transform(PrepareRTLSim())
+
+    # Compute ground-truth output in software
+    inp = context["inp"]
+    o_expected = np.exp(inp)
+
+    # Execute the onnx model to collect the result
+    o_produced = execute_onnx(model, context)["out"]
+
+    # Compare the expected to the produced for exact equality
+    assert np.allclose(o_produced, o_expected)

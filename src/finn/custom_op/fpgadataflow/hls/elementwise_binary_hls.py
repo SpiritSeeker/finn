@@ -976,6 +976,19 @@ class ElementwiseBitShift_hls(
         return attrs
 
 
+@register_custom_op
+class ElementwiseExp_hls(
+    ElementwiseBinaryOperation_hls,
+    elementwise_binary.ElementwiseExp,
+):
+    # Generates list of C++ includes to be placed at the top of the generated
+    # code
+    def global_includes(self):
+        super().global_includes()
+        # additional hls_math include to get hls::expf()
+        self.code_gen_dict["$GLOBALS$"] += ['#include <hls_math.h>']
+
+
 # # Derive a specialization to implement elementwise power of two inputs
 # TODO: std::pow does not work for HLS types and hls::pow fails to link for some
 #  reason
